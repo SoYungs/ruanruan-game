@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>新的旅程即将开始</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #f7f7f7;
+            font-family: "Courier New", Courier, monospace;
+            overflow: hidden;
+            touch-action: manipulation;
+            user-select: none;
+        }
+        #game-container {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            display: none; /* 初始隐藏，横屏显示 */
+        }
+        canvas {
+            background-color: #fff;
+            border-bottom: 2px solid #535353;
+            max-width: 100%;
+        }
+        /* 横屏提示 */
+        #orientation-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; color: #fff;
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+            z-index: 1000; text-align: center;
+        }
+        @media screen and (orientation: landscape) {
+            #orientation-overlay { display: none; }
+            #game-container { display: flex; }
+        }
+
+        /* 信封开场白 */
+        #intro-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: #f7f7f7; z-index: 2000;
+            display: flex; flex-direction: column;
+            justify-content: center; padding: 20px;
+            box-sizing: border-box;
+        }
+        .intro-line {
+            font-size: 18px; color: #535353;
+            margin: 10px 0; min-height: 1.2em;
+            visibility: hidden;
+        }
+        .cursor { display: inline-block; width: 10px; height: 1.2em; background: #535353; vertical-align: middle; animation: blink 0.7s infinite; }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+        
+        #next-btn {
+            margin-top: 20px; padding: 10px 20px;
+            background: #535353; color: #fff; border: none;
+            display: none; font-family: inherit; cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="orientation-overlay">
+        <div style="font-size: 40px;">📱🔄</div>
+        <p>👉 “为了更好的体验，请横屏游玩”</p>
+    </div>
+
+    <div id="intro-overlay">
+        <div id="line1" class="intro-line"></div>
+        <div id="line2" class="intro-line"></div>
+        <div id="line3" class="intro-line"></div>
+        <button id="next-btn">点击继续 (｡♥‿♥｡)</button>
+    </div>
+
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+<script>
+/** 游戏逻辑配置 **/
+const config = {
+    fps: 60,
+    width: 600,
+    height: 150,
+    gravity: 0.6,
+    jumpStrength: -10,
+    groundY: 130,
+    speed: 5,
+    obstacles: ['cactus', 'kettlebell', 'dumbbell', 'book', 'cake']
+};
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+canvas.width = config.width;
+canvas.height = config.height;
+
+let gameRunning = false;
+let score = 0;
+let deathCount = 0;
+let obstacles = [];
+let animationId;
+
+// 像素女孩
+const girl = {
+    x: 50, y: config.groundY - 30,
+    width: 24, height: 34,
+    vy: 0, grounded: true,
+    draw() {
+        ctx.fillStyle = "#535353";
+        // 身体
+        ctx.fillRect(this.x + 4, this.y + 10, 16, 18);
+        // 头
+        ctx.fillRect(this.x + 6, this.y, 12, 10);
+        // 双马尾 (左 & 右)
+        ctx.fillRect(this.x, this.y + 2, 6, 12); 
+        ctx.fillRect(this.x + 18, this.y + 2, 6, 12);
+        // 腿
+        ctx.fillRect(this.x + 6, this.y + 28, 4, 6);
+        ctx.fillRect(this.x + 14, this.y + 28, 4, 6);
+    },
+    jump() {
+        if (this.grounded) {
+            this.vy = config.jumpStrength;
+            this.grounded = false;
+        }
+    },
+    update() {
+        this.vy += config.gravity;
+        this.y += this.vy;
+        if (this.y > config.groundY - 34) {
+            this.y = config.groundY - 34;
+            this.vy = 0;
+            this.grounded = true;
+        }
+    }
+};
+
+// 绘制障碍物
+function drawObstacle(type, x, y) {
+    ctx.fillStyle = "#535353";
+    if (type === 'cactus') { // 仙人掌
+        ctx.fillRect(x + 5, y, 10, 30);
+        ctx.fillRect(x, y + 10, 5, 10);
+        ctx.fillRect(x + 15, y + 5, 5, 12);
+    } else if (type === 'kettlebell') { // 壶铃
+        ctx.fillRect(x + 4, y + 10, 22, 20);
+        ctx.strokeRect(x + 8, y, 14, 10);
+    } else if (type === 'dumbbell') { // 哑铃
+        ctx.fillRect(x, y + 5, 6, 20);
+        ctx.fillRect(x + 6, y + 13, 18, 4);
+        ctx.fillRect(x + 24, y + 5, 6, 20);
+    } else if (type === 'book') { // 书籍
+        ctx.fillRect(x, y + 5, 25, 25);
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(x + 2, y + 8, 21, 2);
+    } else if (type === 'cake') { // 蛋糕
+        ctx.fillRect(x, y + 15, 30, 15);
+        ctx.fillRect(x + 5, y + 5, 20, 10);
+        ctx.fillStyle = "#ff0000"; ctx.fillRect(x + 13, y, 4, 4);
+    }
+}
+
+class Obstacle {
+    constructor() {
+        const availableTypes = config.obstacles.slice(0, deathCount + 1);
+        this.type = availableTypes[Math.floor(Math.random() * availableTypes.length)];
+        this.width = 30;
+        this.x = config.width;
+        this.y = config.groundY - 30;
+    }
+    update() {
+        this.x -= config.speed;
+        drawObstacle(this.type, this.x, this.y);
+    }
+}
+
+function spawnObstacle() {
+    if (Math.random() < 0.02) obstacles.push(new Obstacle());
+}
+
+function checkCollision(a, b) {
+    return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + 30 && a.y + a.height > b.y;
+}
+
+function gameLoop() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    girl.update();
+    girl.draw();
+    
+    spawnObstacle();
+    
+    for (let i = obstacles.length - 1; i >= 0; i--) {
+        obstacles[i].update();
+        if (checkCollision(girl, obstacles[i])) {
+            handleCollision();
+            return;
+        }
+        if (obstacles[i].x < -50) {
+            obstacles.splice(i, 1);
+            score++;
+        }
+    }
+    
+    ctx.fillStyle = "#535353";
+    ctx.fillText(`Score: ${score}`, 530, 20);
+    animationId = requestAnimationFrame(gameLoop);
+}
+
+function handleCollision() {
+    cancelAnimationFrame(animationId);
+    deathCount++;
+    
+    if (deathCount < 5) {
+        ctx.fillStyle = "rgba(255,255,255,0.8)";
+        ctx.fillRect(0,0, canvas.width, canvas.height);
+        ctx.fillStyle = "#535353";
+        ctx.font = "30px Courier";
+        ctx.fillText("GAME OVER ?", 200, 80);
+        ctx.font = "16px Courier";
+        ctx.fillText("点击屏幕原地复活继续前行!", 200, 110);
+        
+        canvas.onclick = () => {
+            obstacles = [];
+            canvas.onclick = () => girl.jump();
+            gameLoop();
+        };
+    } else {
+        showFinalEnding();
+    }
+}
+
+function showFinalEnding() {
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0,0, canvas.width, canvas.height);
+    ctx.fillStyle = "#535353";
+    ctx.font = "24px Courier";
+    ctx.textAlign = "center";
+    ctx.fillText("The End? No, The Start!", config.width/2, 60);
+    ctx.fillText("心想事成", config.width/2, 100);
+    
+    // 简单像素烟花效果
+    for(let i=0; i<10; i++){
+        ctx.fillRect(Math.random()*600, Math.random()*150, 4, 4);
+    }
+}
+
+/** 开场信封逻辑 **/
+const lines = [
+    "给软软：",
+    "新的旅程即将开始，虽说“长风破浪会有时”，但如果浪太大，记得划水划得优雅一点！(～￣▽￣)～",
+    "你的朋友 酸奶。 ฅ•ω•ฅ"
+];
+
+let currentLine = 0;
+function typeWriter(text, elementId, callback) {
+    let i = 0;
+    const el = document.getElementById(elementId);
+    el.style.visibility = "visible";
+    function type() {
+        if (i < text.length) {
+            el.innerHTML = text.substring(0, i+1) + '<span class="cursor"></span>';
+            i++;
+            setTimeout(type, 100);
+        } else {
+            el.innerHTML = text; 
+            callback();
+        }
+    }
+    type();
+}
+
+function startIntro() {
+    typeWriter(lines[0], 'line1', () => {
+        setTimeout(() => {
+            typeWriter(lines[1], 'line2', () => {
+                setTimeout(() => {
+                    typeWriter(lines[2], 'line3', () => {
+                        document.getElementById('next-btn').style.display = "block";
+                    });
+                }, 500);
+            });
+        }, 500);
+    });
+}
+
+document.getElementById('next-btn').onclick = () => {
+    document.getElementById('intro-overlay').style.display = "none";
+    gameRunning = true;
+    canvas.onclick = () => girl.jump();
+    gameLoop();
+};
+
+window.onload = startIntro;
+</script>
+</body>
+</html>

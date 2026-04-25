@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>For 软软</title>
+
+<style>
+body { margin:0; background:#f2f2f2; overflow:hidden; font-family:monospace;}
+#intro { padding:40px; font-size:20px; line-height:1.8;}
+#canvas { display:none; background:#fff; border-top:2px solid #000;}
+#overlayText {
+  position:absolute;
+  top:40%; width:100%;
+  text-align:center;
+  font-size:40px;
+  color:red;
+  display:none;
+}
+</style>
+</head>
+
+<body>
+
+<div id="intro"></div>
+<div id="overlayText">GAME OVER?</div>
+<canvas id="canvas"></canvas>
+
+<script>
+const introLines = [
+"给软软： ( ˘͈ ᵕ ˘͈♡)",
+"",
+"新的旅程即将开始，",
+"虽说“长风破浪会有时”，",
+"但如果浪太大，",
+"记得划水划得优雅一点！(≧▽≦)",
+"",
+"你的朋友 酸奶。"
+];
+
+let introIndex = 0;
+const introDiv = document.getElementById("intro");
+
+introDiv.innerHTML = introLines[0] + "<br>👉 点击继续";
+introIndex = 1;
+
+document.body.onclick = ()=>{
+  if(introIndex < introLines.length){
+    introDiv.innerHTML += "<br>" + introLines[introIndex];
+    introIndex++;
+  } else startGame();
+};
+
+// ===== 游戏 =====
+
+let canvas, ctx;
+let player = { x:80, y:150, vy:0, jumping:false };
+let gravity = 0.9;
+let jumpPower = -15;
+let obstacles = [];
+let score = 0;
+let speed = 6;
+let collisions = 0;
+let frame = 0;
+
+// ===== 像素女孩动画（简化sprite）=====
+function drawGirl(x,y){
+
+  let runFrame = Math.floor(frame/6)%2;
+
+  // 头
+  ctx.fillStyle="#f5d0c5";
+  ctx.fillRect(x,y,18,18);
+
+  // 双马尾
+  ctx.fillStyle="#6b4f3b";
+  ctx.fillRect(x-5,y+4,5,8);
+  ctx.fillRect(x+18,y+4,5,8);
+
+  // 身体
+  ctx.fillStyle="#e8cfc2";
+  ctx.fillRect(x,y+18,18,18);
+
+  // 披风（摆动）
+  ctx.fillStyle="#5a3d2b";
+  ctx.fillRect(x-3,y+18,24, runFrame?8:12);
+
+  // 腿动画
+  ctx.fillStyle="#000";
+  if(runFrame){
+    ctx.fillRect(x+3,y+36,4,8);
+    ctx.fillRect(x+11,y+34,4,8);
+  }else{
+    ctx.fillRect(x+3,y+34,4,8);
+    ctx.fillRect(x+11,y+36,4,8);
+  }
+}
+
+// ===== 开始游戏 =====
+function startGame(){
+  introDiv.style.display="none";
+
+  canvas=document.getElementById("canvas");
+  canvas.style.display="block";
+  canvas.width=window.innerWidth;
+  canvas.height=window.innerHeight;
+
+  ctx=canvas.getContext("2d");
+
+  spawnObstacle();
+  requestAnimationFrame(loop);
+}
+
+// ===== 障碍 =====
+function spawnObstacle(){
+  obstacles.push({x:canvas.width,y:160});
+  setTimeout(spawnObstacle,1200);
+}
+
+// ===== 跳跃 =====
+document.addEventListener("touchstart",jump);
+document.addEventListener("mousedown",jump);
+
+function jump(){
+  if(!player.jumping){
+    player.vy = jumpPower;
+    player.jumping = true;
+  }
+}
+
+// ===== 主循环 =====
+function loop(){
+
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  // 地面
+  ctx.fillRect(0,200,canvas.width,5);
+
+  // 玩家
+  player.vy += gravity;
+  player.y += player.vy;
+
+  if(player.y >=150){
+    player.y=150;
+    player.jumping=false;
+  }
+
+  drawGirl(player.x,player.y);
+
+  // 障碍
+  obstacles.forEach(o=>{
+    o.x -= speed;
+
+    ctx.fillStyle="black";
+    ctx.fillRect(o.x,o.y,20,40);
+
+    if(o.x < player.x+18 && o.x+20 > player.x &&
+       o.y < player.y+40 && o.y+40 > player.y){
+      hit();
+      o.x=-100;
+    }
+  });
+
+  // 速度递增（核心）
+  speed = 6 + score*0.002;
+
+  score++;
+  ctx.fillText("Score:"+score,20,30);
+
+  frame++;
+  requestAnimationFrame(loop);
+}
+
+// ===== 碰撞 =====
+function hit(){
+  collisions++;
+
+  if(collisions < 5){
+    showText("GAME OVER?");
+  }else{
+    endGame();
+  }
+}
+
+function showText(t){
+  const el=document.getElementById("overlayText");
+  el.innerText=t;
+  el.style.display="block";
+  setTimeout(()=>el.style.display="none",800);
+}
+
+function endGame(){
+  showText("The End? No, The Start!");
+  setTimeout(()=>{
+    alert("心想事成 ✨");
+    location.reload();
+  },1200);
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,1234 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>给软软的小游戏 ♡</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #f7f7f7;
+    font-family: monospace;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* ===== ORIENTATION OVERLAY ===== */
+  #orientationOverlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: #f7f7f7;
+    z-index: 9999;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+  }
+  #orientationOverlay.show { display: flex; }
+  .rotate-icon {
+    font-size: 64px;
+    animation: rotateHint 1.5s ease-in-out infinite;
+  }
+  @keyframes rotateHint {
+    0%,100% { transform: rotate(0deg); }
+    50% { transform: rotate(90deg); }
+  }
+  .rotate-text {
+    font-family: monospace;
+    font-size: 16px;
+    color: #555;
+    text-align: center;
+    line-height: 2;
+    image-rendering: pixelated;
+  }
+
+  /* ===== LETTER SCREEN ===== */
+  #letterScreen {
+    position: fixed; inset: 0;
+    background: #f7f7f7;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+  }
+  #letterScreen.hidden { display: none; }
+
+  .letter-container {
+    max-width: 600px;
+    width: 100%;
+    text-align: left;
+  }
+  .letter-line {
+    font-family: monospace;
+    font-size: clamp(14px, 2.5vw, 20px);
+    color: #333;
+    line-height: 2.2;
+    opacity: 0;
+    white-space: pre-wrap;
+    min-height: 1.5em;
+  }
+  .letter-line.visible { opacity: 1; }
+
+  .pixel-char {
+    display: inline-block;
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 0.05s, transform 0.05s;
+  }
+  .pixel-char.shown {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .tap-hint {
+    position: fixed;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: monospace;
+    font-size: 13px;
+    color: #aaa;
+    animation: blink 1.2s infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+  /* ===== GAME SCREEN ===== */
+  #gameScreen {
+    position: fixed; inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #f7f7f7;
+  }
+  #gameScreen.active { display: flex; }
+
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+
+  /* ===== FIREWORKS SCREEN ===== */
+  #endScreen {
+    position: fixed; inset: 0;
+    background: #111;
+    z-index: 2000;
+    display: none;
+    overflow: hidden;
+  }
+  #endScreen.active { display: block; }
+  #endCanvas { display: block; }
+
+  .end-text {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    z-index: 10;
+    opacity: 0;
+    transition: opacity 1s;
+  }
+  .end-text.show { opacity: 1; }
+
+</style>
+</head>
+<body>
+
+<!-- Orientation Warning -->
+<div id="orientationOverlay">
+  <div class="rotate-icon">📱</div>
+  <div class="rotate-text">👉 为了更好的体验<br>请横屏游玩</div>
+</div>
+
+<!-- Letter Screen -->
+<div id="letterScreen">
+  <div class="letter-container" id="letterContainer"></div>
+  <div class="tap-hint" id="tapHint">▼ 点击继续</div>
+</div>
+
+<!-- Game Screen -->
+<div id="gameScreen">
+  <canvas id="gameCanvas"></canvas>
+</div>
+
+<!-- End Screen -->
+<div id="endScreen">
+  <canvas id="endCanvas"></canvas>
+  <div class="end-text" id="endText"></div>
+</div>
+
+<script>
+// ============================================================
+//  LETTER SCREEN
+// ============================================================
+const LETTER_LINES = [
+  "给软软：",
+  "",
+  "新的旅程即将开始，",
+  "虽说\u201c长风破浪会有时\u201d，",
+  "但如果浪太大，",
+  "记得划水划得优雅一点！(ﾉ◕ヮ◕)ﾉ*:･ﾟ✧",
+  "",
+  "你的朋友  酸奶  (´･ω･`) ♡",
+];
+
+let letterPhase = 0; // which line group is revealed
+let charTimers = [];
+let lineAnimating = false;
+let letterDone = false;
+
+const letterContainer = document.getElementById('letterContainer');
+const tapHint = document.getElementById('tapHint');
+const letterScreen = document.getElementById('letterScreen');
+
+// Build DOM for each line
+const lineEls = LETTER_LINES.map((text, i) => {
+  const div = document.createElement('div');
+  div.className = 'letter-line';
+  letterContainer.appendChild(div);
+  return { el: div, text };
+});
+
+function animateLine(lineIndex, onDone) {
+  const { el, text } = lineEls[lineIndex];
+  el.style.opacity = '1';
+  el.innerHTML = '';
+  let i = 0;
+  function next() {
+    if (i >= text.length) { if (onDone) onDone(); return; }
+    const span = document.createElement('span');
+    span.className = 'pixel-char';
+    span.textContent = text[i];
+    el.appendChild(span);
+    // tiny delay before showing
+    setTimeout(() => span.classList.add('shown'), 10);
+    i++;
+    const delay = text[i-1] === '，' || text[i-1] === '。' || text[i-1] === '！' ? 120 : 55;
+    setTimeout(next, delay);
+  }
+  next();
+}
+
+// Each tap advances one line
+let currentLine = 0;
+function showNextLine() {
+  if (lineAnimating) return;
+  if (currentLine >= lineEls.length) {
+    // all done -> start game
+    startGame();
+    return;
+  }
+  lineAnimating = true;
+  tapHint.textContent = '';
+  animateLine(currentLine, () => {
+    currentLine++;
+    lineAnimating = false;
+    if (currentLine >= lineEls.length) {
+      tapHint.textContent = '▼ 点击开始游戏';
+    } else {
+      tapHint.textContent = '▼ 点击继续';
+    }
+  });
+}
+
+letterScreen.addEventListener('click', showNextLine);
+letterScreen.addEventListener('touchend', e => { e.preventDefault(); showNextLine(); });
+
+// Kick off first line immediately
+setTimeout(showNextLine, 400);
+
+function startGame() {
+  letterScreen.classList.add('hidden');
+  document.getElementById('gameScreen').classList.add('active');
+  initGame();
+}
+
+// ============================================================
+//  ORIENTATION
+// ============================================================
+const orientationOverlay = document.getElementById('orientationOverlay');
+function checkOrientation() {
+  const isPortrait = window.innerHeight > window.innerWidth;
+  if (isPortrait) {
+    orientationOverlay.classList.add('show');
+  } else {
+    orientationOverlay.classList.remove('show');
+  }
+}
+window.addEventListener('resize', checkOrientation);
+window.addEventListener('orientationchange', checkOrientation);
+checkOrientation();
+
+// ============================================================
+//  GAME ENGINE
+// ============================================================
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// Scale so game is always 600x150 logical pixels, scaled to fit screen
+const GAME_W = 600;
+const GAME_H = 150;
+let scale = 1;
+
+function resizeCanvas() {
+  const sw = window.innerWidth;
+  const sh = window.innerHeight;
+  scale = Math.min(sw / GAME_W, sh / GAME_H) * 0.95;
+  canvas.width = GAME_W;
+  canvas.height = GAME_H;
+  canvas.style.width = (GAME_W * scale) + 'px';
+  canvas.style.height = (GAME_H * scale) + 'px';
+}
+window.addEventListener('resize', resizeCanvas);
+
+// ------- PIXEL DRAWING HELPERS -------
+function px(ctx, color, x, y, w=1, h=1) {
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, w, h);
+}
+
+// ------- PIXEL FONT (3x5 bitmap) -------
+const PIXEL_FONT = {
+  'A':[[0,1,0],[1,0,1],[1,1,1],[1,0,1],[1,0,1]],
+  'B':[[1,1,0],[1,0,1],[1,1,0],[1,0,1],[1,1,0]],
+  'C':[[0,1,1],[1,0,0],[1,0,0],[1,0,0],[0,1,1]],
+  'D':[[1,1,0],[1,0,1],[1,0,1],[1,0,1],[1,1,0]],
+  'E':[[1,1,1],[1,0,0],[1,1,0],[1,0,0],[1,1,1]],
+  'F':[[1,1,1],[1,0,0],[1,1,0],[1,0,0],[1,0,0]],
+  'G':[[0,1,1],[1,0,0],[1,0,1],[1,0,1],[0,1,1]],
+  'H':[[1,0,1],[1,0,1],[1,1,1],[1,0,1],[1,0,1]],
+  'I':[[1,1,1],[0,1,0],[0,1,0],[0,1,0],[1,1,1]],
+  'J':[[0,0,1],[0,0,1],[0,0,1],[1,0,1],[0,1,0]],
+  'K':[[1,0,1],[1,1,0],[1,0,0],[1,1,0],[1,0,1]],
+  'L':[[1,0,0],[1,0,0],[1,0,0],[1,0,0],[1,1,1]],
+  'M':[[1,0,1],[1,1,1],[1,0,1],[1,0,1],[1,0,1]],
+  'N':[[1,0,1],[1,1,1],[1,1,1],[1,0,1],[1,0,1]],
+  'O':[[0,1,0],[1,0,1],[1,0,1],[1,0,1],[0,1,0]],
+  'P':[[1,1,0],[1,0,1],[1,1,0],[1,0,0],[1,0,0]],
+  'Q':[[0,1,0],[1,0,1],[1,0,1],[1,1,1],[0,1,1]],
+  'R':[[1,1,0],[1,0,1],[1,1,0],[1,0,1],[1,0,1]],
+  'S':[[0,1,1],[1,0,0],[0,1,0],[0,0,1],[1,1,0]],
+  'T':[[1,1,1],[0,1,0],[0,1,0],[0,1,0],[0,1,0]],
+  'U':[[1,0,1],[1,0,1],[1,0,1],[1,0,1],[0,1,0]],
+  'V':[[1,0,1],[1,0,1],[1,0,1],[0,1,0],[0,1,0]],
+  'W':[[1,0,1],[1,0,1],[1,0,1],[1,1,1],[1,0,1]],
+  'X':[[1,0,1],[1,0,1],[0,1,0],[1,0,1],[1,0,1]],
+  'Y':[[1,0,1],[1,0,1],[0,1,0],[0,1,0],[0,1,0]],
+  'Z':[[1,1,1],[0,0,1],[0,1,0],[1,0,0],[1,1,1]],
+  '?':[[0,1,0],[1,0,1],[0,0,1],[0,1,0],[0,1,0]],
+  '!':[[0,1,0],[0,1,0],[0,1,0],[0,0,0],[0,1,0]],
+  ',':[[0,0,0],[0,0,0],[0,0,0],[0,1,0],[1,0,0]],
+  '.':[[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,1,0]],
+  ' ':[[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0]],
+  '0':[[0,1,0],[1,0,1],[1,0,1],[1,0,1],[0,1,0]],
+  '1':[[0,1,0],[1,1,0],[0,1,0],[0,1,0],[1,1,1]],
+  '2':[[1,1,0],[0,0,1],[0,1,0],[1,0,0],[1,1,1]],
+  '3':[[1,1,0],[0,0,1],[0,1,0],[0,0,1],[1,1,0]],
+  '4':[[1,0,1],[1,0,1],[1,1,1],[0,0,1],[0,0,1]],
+  '5':[[1,1,1],[1,0,0],[1,1,0],[0,0,1],[1,1,0]],
+  '6':[[0,1,1],[1,0,0],[1,1,0],[1,0,1],[0,1,0]],
+  '7':[[1,1,1],[0,0,1],[0,1,0],[0,1,0],[0,1,0]],
+  '8':[[0,1,0],[1,0,1],[0,1,0],[1,0,1],[0,1,0]],
+  '9':[[0,1,0],[1,0,1],[0,1,1],[0,0,1],[1,1,0]],
+  '-':[[0,0,0],[0,0,0],[1,1,1],[0,0,0],[0,0,0]],
+};
+
+function drawPixelText(ctx, text, x, y, size=2, color='#535353') {
+  let cx = x;
+  for (const ch of text.toUpperCase()) {
+    const bmp = PIXEL_FONT[ch] || PIXEL_FONT[' '];
+    for (let row = 0; row < bmp.length; row++) {
+      for (let col = 0; col < bmp[row].length; col++) {
+        if (bmp[row][col]) {
+          ctx.fillStyle = color;
+          ctx.fillRect(cx + col*size, y + row*size, size, size);
+        }
+      }
+    }
+    cx += (3 + 1) * size;
+  }
+}
+
+function pixelTextWidth(text, size=2) {
+  return text.length * (3 + 1) * size;
+}
+
+// ------- GAME STATE -------
+let gameState = 'idle'; // idle, running, dead, end
+let score = 0;
+let hiScore = 0;
+let speed = 3;
+let frame = 0;
+let deathCount = 0; // 0=first life, etc.
+let animId = null;
+
+// Ground
+const GROUND_Y = 118;
+
+// ------- GIRL CHARACTER (pixel art) -------
+// Reference: pixel twin-tail girl, warm brown palette
+// Sprite is 16w x 24h logical pixels, drawn at 1px per pixel
+// Colors from reference image
+const C = {
+  hair:   '#6b4226',  // dark brown hair
+  hairhi: '#8b5e3c',  // hair highlight
+  skin:   '#f5c9a0',  // skin
+  blush:  '#f0a8a8',  // cheek blush
+  eye:    '#3a2210',  // dark eye
+  eyehi:  '#ffffff',  // eye shine
+  coat:   '#ddd0b8',  // beige coat/top
+  coatd:  '#c4b49a',  // coat shadow
+  button: '#8b6b4a',  // buttons
+  skirt:  '#8b6b4a',  // brown plaid skirt
+  skirtd: '#6b4c2e',  // skirt dark
+  cape:   '#5a3e28',  // dark brown cape/cloak
+  caped:  '#3e2a18',  // cape shadow
+  leg:    '#f5c9a0',  // bare legs
+  shoe:   '#6b4226',  // dark shoe
+  mouth:  '#c47878',  // mouth
+  collar: '#e8e0d0',  // collar
+};
+
+// Draw the girl at pixel position (gx, gy) - top-left of sprite
+// legPhase: 0,1,2 for run animation; tailPhase: 0,1 for ponytail swing
+function drawGirlSprite(ctx, gx, gy, legPhase, tailPhase, jumping) {
+  const p = (color, x, y, w=1, h=1) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(gx+x, gy+y, w, h);
+  };
+
+  // ---- CAPE (behind body, draw first) ----
+  // Cape flows behind, slightly offset
+  const capeOff = tailPhase === 0 ? 0 : 1;
+  // cape body - left side flowing down
+  p(C.cape,  -1+capeOff, 8,  3, 10);
+  p(C.caped, -1+capeOff, 18, 3, 4);
+  p(C.cape,  -2+capeOff, 10, 2, 8);
+  // cape right side
+  p(C.cape,  13, 8, 2, 9);
+  p(C.caped, 13, 17, 2, 3);
+
+  // ---- HAIR - twin tails hanging down ----
+  // Left ponytail - hangs from left side of head
+  const tailY = tailPhase === 0 ? 0 : -1;
+  // left tail
+  p(C.hair, -1, 5+tailY, 2, 3);
+  p(C.hair, -2, 6+tailY, 2, 8);
+  p(C.hair, -1, 12+tailY, 2, 4);
+  p(C.hairhi,-1, 7+tailY, 1, 3);
+  // right tail
+  p(C.hair, 15, 5+tailY, 2, 3);
+  p(C.hair, 15, 6+tailY, 2, 8);  // was 16
+  p(C.hair, 15, 12+tailY, 2, 4);
+  p(C.hairhi,15, 7+tailY, 1, 3);
+
+  // ---- HEAD ----
+  // top of head hair
+  p(C.hair, 3, 0, 10, 2);
+  p(C.hair, 2, 1, 12, 3);
+  p(C.hair, 2, 2,  1, 2); p(C.hair, 13, 2, 1, 2); // sides
+  // hair tufts at top
+  p(C.hair, 4, 0, 1, 1); p(C.hair, 11, 0, 1, 1);
+  // face area
+  p(C.skin, 3, 3, 10, 5);
+  p(C.skin, 2, 4,  1, 3); p(C.skin, 13, 4, 1, 3);
+  // hair fringe/bangs
+  p(C.hair, 3, 3, 2, 1); p(C.hair, 11, 3, 2, 1);
+  p(C.hair, 2, 3, 1, 1); p(C.hair, 13, 3, 1, 1);
+  // eyes
+  p(C.eye,  4, 4, 2, 2);
+  p(C.eye, 10, 4, 2, 2);
+  p(C.eyehi, 5, 4, 1, 1);
+  p(C.eyehi,11, 4, 1, 1);
+  // blush
+  p(C.blush, 3, 6, 2, 1);
+  p(C.blush,11, 6, 2, 1);
+  // mouth
+  p(C.mouth, 6, 7, 4, 1);
+  p(C.mouth, 7, 8, 2, 1);
+  // hair on sides of face
+  p(C.hair, 2, 4, 1, 1); p(C.hair, 13, 4, 1, 1);
+
+  // ---- NECK ----
+  p(C.skin, 6, 8, 4, 1);
+
+  // ---- COLLAR ----
+  p(C.collar, 5, 9, 6, 1);
+  p(C.collar, 4, 9, 1, 1); p(C.collar, 11, 9, 1, 1);
+
+  // ---- COAT/TOP ----
+  p(C.coat,  3,  9, 10, 6);
+  p(C.coat,  2, 10,  1, 5); p(C.coat, 13, 10, 1, 5);
+  p(C.coatd, 3, 15, 10, 1); // coat bottom edge
+  // buttons
+  p(C.button, 7, 11, 2, 1);
+  p(C.button, 7, 13, 2, 1);
+  // coat shadow under arm
+  p(C.coatd, 3, 12, 1, 2); p(C.coatd, 12, 12, 1, 2);
+
+  // ---- ARMS ----
+  p(C.coat, 1, 9, 2, 4);
+  p(C.coat,13, 9, 2, 4);
+  p(C.skin, 1,13, 2, 2); // hands
+  p(C.skin,13,13, 2, 2);
+
+  // ---- SKIRT ----
+  p(C.skirt,  2, 15, 12, 5);
+  p(C.skirtd, 2, 19, 12, 1); // skirt hem
+  // plaid lines
+  p(C.skirtd, 5, 15, 1, 5);
+  p(C.skirtd, 8, 15, 1, 5);
+  p(C.skirtd,11, 15, 1, 5);
+  p(C.skirtd, 2, 17, 12, 1);
+
+  // ---- LEGS & SHOES ----
+  if (jumping) {
+    // legs pulled up
+    p(C.leg, 4, 20, 3, 2);
+    p(C.leg, 9, 20, 3, 2);
+    p(C.shoe, 3, 22, 4, 1);
+    p(C.shoe, 9, 22, 4, 1);
+  } else if (legPhase === 0) {
+    // stride 0 - neutral
+    p(C.leg, 5, 20, 2, 3);
+    p(C.leg, 9, 20, 2, 3);
+    p(C.shoe, 4, 23, 3, 1);
+    p(C.shoe, 9, 23, 3, 1);
+  } else if (legPhase === 1) {
+    // stride 1 - left forward
+    p(C.leg, 4, 20, 2, 3);
+    p(C.leg,10, 19, 2, 3);
+    p(C.shoe, 3, 23, 3, 1);
+    p(C.shoe, 9, 22, 3, 1);
+  } else {
+    // stride 2 - right forward
+    p(C.leg, 6, 19, 2, 3);
+    p(C.leg, 9, 20, 2, 3);
+    p(C.shoe, 5, 22, 3, 1);
+    p(C.shoe, 9, 23, 3, 1);
+  }
+}
+
+const GIRL_SPRITES = [
+  (ctx, gx, gy) => drawGirlSprite(ctx, gx, gy, 0, 0, false),
+  (ctx, gx, gy) => drawGirlSprite(ctx, gx, gy, 1, 1, false),
+  (ctx, gx, gy) => drawGirlSprite(ctx, gx, gy, 2, 0, false),
+];
+
+const GIRL_JUMP_SPRITE = (ctx, gx, gy) => drawGirlSprite(ctx, gx, gy, 0, 1, true);
+
+const GIRL_W = 16;
+const GIRL_H = 24;
+
+// ------- CACTUS SPRITES -------
+function drawCactus(ctx, x, type) {
+  // type 0: small single, type 1: tall, type 2: group
+  const y = GROUND_Y - 24;
+  if (type === 0) {
+    // small cactus
+    const c = '#535353';
+    for(let i=0;i<20;i++) px(ctx,c,x+4,y+i);
+    for(let i=0;i<20;i++) px(ctx,c,x+5,y+i);
+    // arms
+    for(let i=6;i<10;i++) px(ctx,c,x+i,y+8);
+    for(let i=6;i<10;i++) px(ctx,c,x+i,y+9);
+    px(ctx,c,x+9,y+5); px(ctx,c,x+9,y+6); px(ctx,c,x+9,y+7); px(ctx,c,x+9,y+8);
+    for(let i=0;i<5;i++) px(ctx,c,x+i,y+11);
+    for(let i=0;i<5;i++) px(ctx,c,x+i,y+12);
+    px(ctx,c,x+0,y+8); px(ctx,c,x+0,y+9); px(ctx,c,x+0,y+10);
+  } else if (type === 1) {
+    // tall cactus
+    const c = '#535353';
+    for(let i=0;i<26;i++) px(ctx,c,x+5,y-6+i);
+    for(let i=0;i<26;i++) px(ctx,c,x+6,y-6+i);
+    for(let i=5;i<11;i++) px(ctx,c,x+i,y+2);
+    px(ctx,c,x+10,y-2);px(ctx,c,x+10,y-1);px(ctx,c,x+10,y);px(ctx,c,x+10,y+1);px(ctx,c,x+10,y+2);
+    for(let i=0;i<5;i++) px(ctx,c,x+i,y+4);
+    px(ctx,c,x+0,y);px(ctx,c,x+0,y+1);px(ctx,c,x+0,y+2);px(ctx,c,x+0,y+3);px(ctx,c,x+0,y+4);
+  } else {
+    // group of 2
+    drawCactusSingle(ctx, x, y, '#535353', 18);
+    drawCactusSingle(ctx, x+16, y+4, '#535353', 14);
+  }
+}
+
+function drawCactusSingle(ctx, x, y, c, h) {
+  for(let i=0;i<h;i++) px(ctx,c,x+3,y+i);
+  for(let i=0;i<h;i++) px(ctx,c,x+4,y+i);
+  for(let i=3;i<7;i++) px(ctx,c,x+i,y+4);
+  px(ctx,c,x+6,y+1);px(ctx,c,x+6,y+2);px(ctx,c,x+6,y+3);px(ctx,c,x+6,y+4);
+  for(let i=0;i<4;i++) px(ctx,c,x+i,y+6);
+  px(ctx,c,x+0,y+3);px(ctx,c,x+0,y+4);px(ctx,c,x+0,y+5);px(ctx,c,x+0,y+6);
+}
+
+// ------- BIRD SPRITES -------
+function drawBird(ctx, x, y, wingUp) {
+  const c = '#535353';
+  if (wingUp) {
+    // wings up
+    px(ctx,c,x+2,y-3); px(ctx,c,x+3,y-3); px(ctx,c,x+8,y-3); px(ctx,c,x+9,y-3);
+    px(ctx,c,x+1,y-2); px(ctx,c,x+4,y-2); px(ctx,c,x+7,y-2); px(ctx,c,x+10,y-2);
+  } else {
+    // wings down
+    px(ctx,c,x+1,y+2); px(ctx,c,x+4,y+2); px(ctx,c,x+7,y+2); px(ctx,c,x+10,y+2);
+  }
+  // body
+  for(let i=2;i<10;i++) px(ctx,c,x+i,y);
+  for(let i=1;i<11;i++) px(ctx,c,x+i,y+1);
+  // beak
+  px(ctx,c,x+11,y); px(ctx,c,x+12,y);
+  // eye
+  px(ctx,'#f7f7f7',x+9,y);
+}
+
+// ------- KETTLEBELL SPRITE -------
+function drawKettlebell(ctx, x) {
+  const y = GROUND_Y - 20;
+  const c = '#535353';
+  // handle
+  px(ctx,c,x+3,y); px(ctx,c,x+4,y); px(ctx,c,x+5,y); px(ctx,c,x+6,y);
+  px(ctx,c,x+2,y+1); px(ctx,c,x+7,y+1);
+  px(ctx,c,x+2,y+2); px(ctx,c,x+7,y+2);
+  // body
+  for(let i=1;i<=7;i++) px(ctx,c,x+i,y+3);
+  for(let i=0;i<=8;i++) px(ctx,c,x+i,y+4);
+  for(let i=0;i<=8;i++) px(ctx,c,x+i,y+5);
+  for(let i=0;i<=8;i++) px(ctx,c,x+i,y+6);
+  for(let i=1;i<=7;i++) px(ctx,c,x+i,y+7);
+  for(let i=2;i<=6;i++) px(ctx,c,x+i,y+8);
+  // shine
+  px(ctx,'#aaa',x+2,y+4); px(ctx,'#aaa',x+3,y+4);
+  px(ctx,'#aaa',x+2,y+5);
+}
+
+// ------- DUMBBELL SPRITE -------
+function drawDumbbell(ctx, x) {
+  const y = GROUND_Y - 10;
+  const c = '#535353';
+  // left weight
+  for(let i=0;i<4;i++) px(ctx,c,x,y+i);
+  for(let i=0;i<4;i++) px(ctx,c,x+1,y+i);
+  // bar
+  for(let i=2;i<11;i++) px(ctx,c,x+i,y+1);
+  for(let i=2;i<11;i++) px(ctx,c,x+i,y+2);
+  // right weight
+  for(let i=0;i<4;i++) px(ctx,c,x+11,y+i);
+  for(let i=0;i<4;i++) px(ctx,c,x+12,y+i);
+  // shine
+  px(ctx,'#aaa',x+3,y+1); px(ctx,'#aaa',x+3,y+2);
+}
+
+// ------- BOOK SPRITE -------
+function drawBook(ctx, x) {
+  const y = GROUND_Y - 18;
+  const c = '#4a7cc9';
+  const spine = '#2a4a99';
+  // spine
+  for(let i=0;i<18;i++) px(ctx,spine,x,y+i);
+  for(let i=0;i<18;i++) px(ctx,spine,x+1,y+i);
+  // cover
+  for(let r=0;r<18;r++) for(let cc=2;cc<14;cc++) px(ctx,c,x+cc,y+r);
+  // pages
+  px(ctx,'#f0f0f0',x+13,y+1);
+  for(let r=2;r<17;r++) px(ctx,'#e8e8e8',x+13,y+r);
+  // title lines
+  px(ctx,'#fff',x+4,y+5); for(let cc=4;cc<12;cc++) px(ctx,'#fff',x+cc,y+5);
+  for(let cc=4;cc<11;cc++) px(ctx,'#fff',x+cc,y+7);
+  for(let cc=5;cc<10;cc++) px(ctx,'#fff',x+cc,y+9);
+  // star on cover
+  px(ctx,'#FFD700',x+7,y+12); px(ctx,'#FFD700',x+6,y+13); px(ctx,'#FFD700',x+7,y+13); px(ctx,'#FFD700',x+8,y+13); px(ctx,'#FFD700',x+7,y+14);
+}
+
+// ------- CAKE SPRITE -------
+function drawCake(ctx, x) {
+  const y = GROUND_Y - 22;
+  // plate
+  for(let i=0;i<18;i++) px(ctx,'#ccc',x+i,y+22);
+  // bottom tier
+  for(let r=14;r<22;r++) for(let c=2;c<16;c++) px(ctx,'#FFB6C1',x+c,y+r);
+  // middle tier
+  for(let r=7;r<14;r++) for(let c=4;c<14;c++) px(ctx,'#FF91A4',x+c,y+r);
+  // top tier
+  for(let r=2;r<7;r++) for(let c=6;c<12;c++) px(ctx,'#FF6B8A',x+c,y+r);
+  // frosting drips
+  px(ctx,'#fff',x+5,y+7); px(ctx,'#fff',x+5,y+8); px(ctx,'#fff',x+12,y+7); px(ctx,'#fff',x+12,y+8);
+  px(ctx,'#fff',x+3,y+14); px(ctx,'#fff',x+3,y+15); px(ctx,'#fff',x+15,y+14); px(ctx,'#fff',x+15,y+15);
+  // candle
+  for(let r=0;r<3;r++) { px(ctx,'#FFD700',x+8,y+r); px(ctx,'#FFD700',x+9,y+r); }
+  // flame
+  px(ctx,'#FF6600',x+8,y-1); px(ctx,'#FF6600',x+9,y-1); px(ctx,'#FFFF00',x+8,y-2);
+  // dots
+  px(ctx,'#FF4488',x+7,y+16); px(ctx,'#FF4488',x+10,y+16); px(ctx,'#FF4488',x+13,y+16);
+  px(ctx,'#FF4488',x+5,y+10); px(ctx,'#FF4488',x+12,y+10);
+}
+
+// ------- CLOUD -------
+function drawCloud(ctx, x, y) {
+  const c = '#ddd';
+  for(let i=2;i<10;i++) px(ctx,c,x+i,y+2);
+  for(let i=0;i<13;i++) px(ctx,c,x+i,y+3);
+  for(let i=0;i<13;i++) px(ctx,c,x+i,y+4);
+  for(let i=1;i<12;i++) px(ctx,c,x+i,y+5);
+}
+
+// ------- GROUND -------
+function drawGround(ctx, offset) {
+  ctx.fillStyle = '#535353';
+  ctx.fillRect(0, GROUND_Y, GAME_W, 1);
+  // pebbles
+  const pebbles = [10,40,80,130,175,220,270,310,360,400,450,490,540,580];
+  for (const p of pebbles) {
+    const px2 = ((p - offset) % GAME_W + GAME_W) % GAME_W;
+    ctx.fillRect(px2, GROUND_Y+1, 2, 1);
+    ctx.fillRect(px2+4, GROUND_Y+2, 1, 1);
+  }
+}
+
+// ------- SCORE -------
+function drawScore(ctx) {
+  const scoreStr = 'HI ' + String(hiScore).padStart(5,'0') + '  ' + String(Math.floor(score)).padStart(5,'0');
+  drawPixelText(ctx, scoreStr, GAME_W - pixelTextWidth(scoreStr, 2) - 4, 8, 2);
+}
+
+// ------- OBSTACLE TYPES -------
+// Returns obstacle types available for current deathCount
+function getObstacleTypes() {
+  // 0=smallCactus, 1=tallCactus, 2=groupCactus, 3=bird
+  // +4=kettlebell, +5=dumbbell, +6=book, +7=cake
+  const base = [0, 1, 2, 3];
+  if (deathCount >= 1) base.push(4);
+  if (deathCount >= 2) base.push(5);
+  if (deathCount >= 3) base.push(6);
+  if (deathCount >= 4) base.push(7);
+  return base;
+}
+
+function randomObstacleType() {
+  const types = getObstacleTypes();
+  return types[Math.floor(Math.random() * types.length)];
+}
+
+function obstacleWidth(type) {
+  if (type===0) return 14;
+  if (type===1) return 14;
+  if (type===2) return 28;
+  if (type===3) return 16;
+  if (type===4) return 10;
+  if (type===5) return 14;
+  if (type===6) return 14;
+  if (type===7) return 20;
+  return 14;
+}
+
+function obstacleHeight(type) {
+  if (type===0) return 22;
+  if (type===1) return 28;
+  if (type===2) return 22;
+  if (type===3) return 14;
+  if (type===4) return 20;
+  if (type===5) return 10;
+  if (type===6) return 18;
+  if (type===7) return 24;
+  return 22;
+}
+
+function drawObstacle(ctx, obs) {
+  if (obs.type===0) drawCactus(ctx, obs.x, 0);
+  else if (obs.type===1) drawCactus(ctx, obs.x, 1);
+  else if (obs.type===2) drawCactus(ctx, obs.x, 2);
+  else if (obs.type===3) drawBird(ctx, obs.x, obs.y, Math.floor(frame/8)%2===0);
+  else if (obs.type===4) drawKettlebell(ctx, obs.x);
+  else if (obs.type===5) drawDumbbell(ctx, obs.x);
+  else if (obs.type===6) drawBook(ctx, obs.x);
+  else if (obs.type===7) drawCake(ctx, obs.x);
+}
+
+// ------- GAME OBJECTS -------
+let girl = { x: 60, y: GROUND_Y - GIRL_H, vy: 0, jumping: false, ducking: false };
+let obstacles = [];
+let clouds = [{x:100,y:30},{x:300,y:20},{x:500,y:35}];
+let groundOffset = 0;
+let nextObstacleIn = 80;
+let legFrame = 0;
+
+// Dead flash
+let deadFlashTimer = 0;
+let showGameOver = false;
+let reviveTimer = 0;
+let reviving = false;
+
+const GRAVITY = 0.6;
+const JUMP_VY = -10;
+
+function jump() {
+  if (!girl.jumping && gameState === 'running') {
+    girl.vy = JUMP_VY;
+    girl.jumping = true;
+  }
+  if (gameState === 'idle') {
+    gameState = 'running';
+  }
+  if (gameState === 'dead' && !reviving) {
+    // revive
+    reviving = true;
+    reviveTimer = 60;
+  }
+}
+
+// Touch / tap
+canvas.addEventListener('touchstart', e => { e.preventDefault(); jump(); }, {passive:false});
+canvas.addEventListener('click', jump);
+document.addEventListener('keydown', e => { if(e.code==='Space'||e.code==='ArrowUp') { e.preventDefault(); jump(); }});
+
+function collides(girl, obs) {
+  const gx1 = girl.x + 3, gy1 = girl.y + 3;
+  const gx2 = girl.x + GIRL_W - 3, gy2 = girl.y + GIRL_H - 4;
+  let ox1, oy1, ox2, oy2;
+  if (obs.type === 3) {
+    ox1 = obs.x + 1; oy1 = obs.y - obstacleHeight(obs.type) + 2;
+    ox2 = obs.x + obstacleWidth(obs.type) - 1; oy2 = obs.y + 2;
+  } else {
+    ox1 = obs.x + 2; oy1 = GROUND_Y - obstacleHeight(obs.type) + 2;
+    ox2 = obs.x + obstacleWidth(obs.type) - 2; oy2 = GROUND_Y;
+  }
+  return gx1 < ox2 && gx2 > ox1 && gy1 < oy2 && gy2 > oy1;
+}
+
+function update() {
+  frame++;
+  if (gameState !== 'running') {
+    if (gameState === 'dead') {
+      deadFlashTimer++;
+      if (deadFlashTimer > 30) showGameOver = true;
+      if (reviving) {
+        reviveTimer--;
+        if (reviveTimer <= 0) {
+          // check if true end
+          if (deathCount >= 5) {
+            showEndScreen();
+            return;
+          }
+          gameState = 'running';
+          showGameOver = false;
+          reviving = false;
+          deadFlashTimer = 0;
+          girl.y = GROUND_Y - GIRL_H;
+          girl.vy = 0;
+          girl.jumping = false;
+          obstacles = [];
+          nextObstacleIn = 100;
+        }
+      }
+    }
+    return;
+  }
+
+  score += speed * 0.05;
+  if (score > hiScore) hiScore = score;
+  speed = 3 + Math.floor(score / 200) * 0.3;
+  groundOffset = (groundOffset + speed) % GAME_W;
+
+  // girl physics
+  girl.vy += GRAVITY;
+  girl.y += girl.vy;
+  if (girl.y >= GROUND_Y - GIRL_H) {
+    girl.y = GROUND_Y - GIRL_H;
+    girl.vy = 0;
+    girl.jumping = false;
+  }
+
+  // leg animation
+  if (!girl.jumping && frame % 6 === 0) legFrame = (legFrame + 1) % 3;
+
+  // clouds
+  for (const c of clouds) {
+    c.x -= speed * 0.3;
+    if (c.x < -60) { c.x = GAME_W + 30; c.y = 15 + Math.random()*25; }
+  }
+
+  // obstacles
+  nextObstacleIn--;
+  if (nextObstacleIn <= 0) {
+    const type = randomObstacleType();
+    const birdY = type === 3 ? GROUND_Y - 20 - Math.floor(Math.random()*25) : GROUND_Y;
+    obstacles.push({ x: GAME_W + 10, y: birdY, type });
+    nextObstacleIn = 60 + Math.floor(Math.random() * 80) + Math.max(0, 50 - score/20);
+  }
+
+  for (const obs of obstacles) {
+    obs.x -= speed;
+    if (collides(girl, obs)) {
+      gameState = 'dead';
+      deathCount++;
+      deadFlashTimer = 0;
+      showGameOver = false;
+      reviving = false;
+      return;
+    }
+  }
+  obstacles = obstacles.filter(o => o.x > -40);
+}
+
+function drawGameOver(ctx) {
+  if (!showGameOver) return;
+  const line1 = 'GAME OVER?';
+  const line2 = 'NO!';
+  const s = 3;
+  const tw1 = pixelTextWidth(line1, s);
+  const tw2 = pixelTextWidth(line2, s);
+  const ty = GAME_H / 2 - 22;
+  drawPixelText(ctx, line1, (GAME_W - tw1) / 2, ty, s);
+  drawPixelText(ctx, line2, (GAME_W - tw2) / 2, ty + 20, s, '#FF6B8A');
+
+  // tap to continue hint
+  const hint = 'TAP TO CONTINUE';
+  const hw = pixelTextWidth(hint, 1);
+  drawPixelText(ctx, hint, (GAME_W-hw)/2, ty+38, 1, '#999');
+}
+
+function drawIdle(ctx) {
+  const hint = 'TAP TO START';
+  const hw = pixelTextWidth(hint, 2);
+  drawPixelText(ctx, hint, (GAME_W-hw)/2, GAME_H/2 - 20, 2, '#999');
+}
+
+function draw() {
+  ctx.clearRect(0, 0, GAME_W, GAME_H);
+  ctx.fillStyle = '#f7f7f7';
+  ctx.fillRect(0, 0, GAME_W, GAME_H);
+
+  drawGround(ctx, groundOffset);
+  for (const c of clouds) drawCloud(ctx, c.x, c.y);
+  for (const obs of obstacles) drawObstacle(ctx, obs);
+
+  // draw girl (flash when dead)
+  if (gameState !== 'dead' || Math.floor(deadFlashTimer/5)%2===0) {
+    const sprite = girl.jumping ? GIRL_JUMP_SPRITE : GIRL_SPRITES[legFrame];
+    sprite(ctx, girl.x, girl.y);
+  }
+
+  drawScore(ctx);
+
+  if (gameState === 'idle') drawIdle(ctx);
+  if (gameState === 'dead') drawGameOver(ctx);
+
+  // death count indicator
+  if (deathCount > 0 && gameState === 'running') {
+    const icons = ['🏋️','🏋️','📚','🎂'];
+    // just draw small pixel hearts as lives indicator
+    for(let i=0;i<Math.min(deathCount,4);i++) {
+      drawPixelHeart(ctx, 8+i*12, 8, '#FF6B8A');
+    }
+  }
+}
+
+function drawPixelHeart(ctx, x, y, c) {
+  const h = [[0,1,0,1,0],[1,1,1,1,1],[1,1,1,1,1],[0,1,1,1,0],[0,0,1,0,0]];
+  for(let r=0;r<h.length;r++) for(let cc=0;cc<h[r].length;cc++) if(h[r][cc]) px(ctx,c,x+cc,y+r);
+}
+
+let lastTime = 0;
+function gameLoop(ts) {
+  const dt = ts - lastTime;
+  lastTime = ts;
+  update();
+  draw();
+  animId = requestAnimationFrame(gameLoop);
+}
+
+function initGame(keepHi = false) {
+  resizeCanvas();
+  gameState = 'idle';
+  score = 0;
+  if (!keepHi) hiScore = 0;
+  speed = 3; frame = 0; legFrame = 0;
+  deathCount = 0; legFrame = 0; groundOffset = 0;
+  girl = { x: 60, y: GROUND_Y - GIRL_H, vy: 0, jumping: false };
+  obstacles = []; nextObstacleIn = 100;
+  clouds = [{x:100,y:30},{x:300,y:20},{x:500,y:35}];
+  deadFlashTimer = 0; showGameOver = false; reviving = false; reviveTimer = 0;
+  if (animId) cancelAnimationFrame(animId);
+  animId = requestAnimationFrame(gameLoop);
+}
+
+// ============================================================
+//  END SCREEN — Pixel Fireworks + Sequential Text
+// ============================================================
+const endScreen = document.getElementById('endScreen');
+const endCanvas = document.getElementById('endCanvas');
+const endCtx = endCanvas.getContext('2d');
+const endTextEl = document.getElementById('endText');
+
+// Pixel bitmaps for 心想事成 — 11x11 grid each, carefully drawn
+const HANZI_BITMAPS = {
+  '心': [
+    [0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,1,0,0,0,0,0],
+    [0,0,0,0,1,0,1,0,0,0,0],
+    [0,0,1,0,1,0,0,1,0,1,0],
+    [0,1,0,1,0,0,0,0,1,0,0],
+    [1,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,0,0,1],
+    [0,1,1,0,0,0,0,0,1,1,0],
+    [0,0,0,1,1,0,1,1,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0],
+  ],
+  '想': [
+    [0,0,1,0,1,0,1,0,0,0,0],
+    [0,0,1,1,1,1,1,0,0,0,0],
+    [0,0,1,0,1,0,1,0,0,0,0],
+    [0,0,1,1,1,1,1,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0],
+    [0,1,1,1,1,1,1,1,1,1,0],
+    [0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,1,0,0,1,0,0,1,0,0],
+    [0,1,0,0,0,0,0,0,0,1,0],
+    [0,1,0,0,0,0,0,0,0,1,0],
+    [0,0,1,1,1,1,1,1,1,0,0],
+  ],
+  '事': [
+    [0,0,0,1,1,1,1,1,0,0,0],
+    [0,0,0,0,0,1,0,0,0,0,0],
+    [0,1,1,1,1,1,1,1,1,1,0],
+    [0,0,0,0,0,1,0,0,0,0,0],
+    [0,0,0,1,1,1,1,1,0,0,0],
+    [0,0,0,0,0,1,0,0,0,0,0],
+    [0,1,1,1,1,1,1,1,1,1,0],
+    [0,0,0,0,0,1,0,0,0,0,0],
+    [0,0,0,0,0,1,0,0,0,0,0],
+    [0,0,0,0,0,1,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0],
+  ],
+  '成': [
+    [0,0,0,1,1,1,1,1,0,0,0],
+    [0,0,0,1,0,0,0,0,0,1,0],
+    [0,1,1,1,1,0,0,0,1,0,0],
+    [0,0,0,1,0,1,0,0,1,0,0],
+    [0,0,0,1,0,0,1,0,1,0,0],
+    [0,0,0,1,0,0,0,1,1,0,0],
+    [0,1,0,1,0,0,0,0,1,0,0],
+    [1,0,0,1,0,0,0,0,0,0,0],
+    [0,0,0,0,1,1,0,0,0,0,0],
+    [0,0,0,0,0,0,1,1,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0],
+  ],
+};
+
+function drawHanzi(ctx, char, x, y, size, color) {
+  const bmp = HANZI_BITMAPS[char];
+  if (!bmp) return;
+  const gap = Math.max(1, Math.floor(size * 0.15));
+  for (let r = 0; r < bmp.length; r++) {
+    for (let c = 0; c < bmp[r].length; c++) {
+      if (bmp[r][c]) {
+        ctx.fillStyle = color;
+        ctx.fillRect(x + c * size, y + r * size, size - gap, size - gap);
+        // inner highlight
+        if (size >= 6) {
+          ctx.fillStyle = 'rgba(255,255,255,0.25)';
+          ctx.fillRect(x + c * size, y + r * size, Math.max(1,Math.floor(size/3)), Math.max(1,Math.floor(size/3)));
+        }
+      }
+    }
+  }
+}
+
+function showEndScreen() {
+  if (animId) cancelAnimationFrame(animId);
+  document.getElementById('gameScreen').classList.remove('active');
+  endScreen.classList.add('active');
+
+  const W = endCanvas.width  = window.innerWidth;
+  const H = endCanvas.height = window.innerHeight;
+
+  // ---- FIREWORKS ----
+  const particles = [];
+  const fwColors = ['#FF6B8A','#FFD700','#00CFFF','#FF91A4','#7DFF7D','#FFB347','#B39DDB','#ffffff','#FF4466'];
+
+  function spawnFirework(fx, fy) {
+    fx = fx || 60 + Math.random() * (W - 120);
+    fy = fy || 30 + Math.random() * (H * 0.55);
+    const color = fwColors[Math.floor(Math.random() * fwColors.length)];
+    const count = 20 + Math.floor(Math.random() * 12);
+    for (let a = 0; a < count; a++) {
+      const angle = (a / count) * Math.PI * 2;
+      const spd   = 1.5 + Math.random() * 3.5;
+      const sz    = 2 + Math.floor(Math.random() * 3);
+      particles.push({
+        x: fx, y: fy,
+        vx: Math.cos(angle) * spd,
+        vy: Math.sin(angle) * spd,
+        life: 55 + Math.random() * 50,
+        maxLife: 105,
+        color, sz,
+      });
+    }
+  }
+
+  // ---- TEXT STATE ----
+  // Phase 0: fade in "THE END? NO, THE START!" (two lines, staggered)
+  // Phase 1: hold 1.2s
+  // Phase 2: fade out english
+  // Phase 3: 心想事成 each char bursts in one by one with mini firework
+  // Phase 4: hold + "tap to replay"
+  let fwFrame   = 0;
+  let phase     = 0;
+  let englishA  = 0;   // 0→1 fade in
+  let englishFA = 0;   // 1→0 fade out
+  let holdTimer = 0;
+  let charIndex = 0;   // which hanzi is next
+  let charAlphas= [0,0,0,0];
+  let charTimer = 0;
+  let replayA   = 0;
+
+  const CHARS = ['心','想','事','成'];
+  const CHAR_COLORS = ['#FF6B8A','#FFD700','#00CFFF','#7DFF7D'];
+
+  // Pixel text layout
+  const PS = 3; // pixel size for english
+  const L1 = 'THE END?';
+  const L2 = 'NO, THE START!';
+  const lw1 = pixelTextWidth(L1, PS);
+  const lw2 = pixelTextWidth(L2, PS);
+  const ly1 = H * 0.35;
+  const ly2 = ly1 + PS * 8;
+
+  // Hanzi layout — centred row, larger pixels
+  const HZ = Math.max(8, Math.floor(Math.min(W, H) / 18)); // pixel size per hanzi pixel
+  const HW = 11 * HZ; // one char width (11x11 grid)
+  const GAP = Math.floor(HZ * 1.2);
+  const totalHW = CHARS.length * HW + (CHARS.length - 1) * GAP;
+  const hzX0 = (W - totalHW) / 2;
+  const hzY  = H * 0.48;
+
+  // Overlay canvas for text (sits above fireworks)
+  const ov = document.createElement('canvas');
+  ov.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;';
+  ov.width = W; ov.height = H;
+  endScreen.appendChild(ov);
+  const oc = ov.getContext('2d');
+
+  function renderText() {
+    oc.clearRect(0, 0, W, H);
+
+    // English lines
+    if (englishA > 0) {
+      // line 1 always together
+      oc.globalAlpha = Math.max(0, englishA - englishFA);
+      drawPixelText(oc, L1, (W - lw1) / 2, ly1, PS, '#FFD700');
+      oc.globalAlpha = Math.max(0, Math.min(1, (englishA - 0.4) * 2) - englishFA);
+      drawPixelText(oc, L2, (W - lw2) / 2, ly2, PS, '#FF91A4');
+    }
+
+    // Hanzi — each fades + scales in
+    for (let i = 0; i < CHARS.length; i++) {
+      if (charAlphas[i] <= 0) continue;
+      const a = Math.min(1, charAlphas[i]);
+      oc.globalAlpha = a;
+      const cx = hzX0 + i * (HW + GAP);
+      // slight pop-in scale via offset
+      const pop = Math.max(0, 1 - charAlphas[i]) * HZ * 2;
+      drawHanzi(oc, CHARS[i], Math.round(cx), Math.round(hzY), HZ, CHAR_COLORS[i]);
+      // glow outline 1px offset
+
+    }
+
+    // Replay hint
+    if (replayA > 0) {
+      oc.globalAlpha = replayA * (0.5 + 0.5 * Math.sin(fwFrame * 0.08));
+      const hint = 'TAP TO PLAY AGAIN';
+      const hw = pixelTextWidth(hint, 2);
+      drawPixelText(oc, hint, (W - hw) / 2, hzY + 11 * HZ + 16, 2, '#ffffff');
+    }
+
+    oc.globalAlpha = 1;
+  }
+
+  function fwLoop() {
+    fwFrame++;
+
+    // Dark trail
+    endCtx.fillStyle = 'rgba(10,10,20,0.28)';
+    endCtx.fillRect(0, 0, W, H);
+
+    // Spawn fireworks on schedule
+    if (fwFrame === 1)  { spawnFirework(W*0.25, H*0.25); spawnFirework(W*0.75, H*0.3); spawnFirework(W*0.5, H*0.2); }
+    if (fwFrame % 22 === 0 && phase < 3) spawnFirework();
+    if (fwFrame % 30 === 0 && phase >= 3) spawnFirework();
+
+    // Draw particles
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx; p.y += p.vy; p.vy += 0.05; p.life--;
+      if (p.life <= 0) { particles.splice(i, 1); continue; }
+      endCtx.globalAlpha = (p.life / p.maxLife) * 0.9;
+      endCtx.fillStyle = p.color;
+      endCtx.fillRect(Math.round(p.x), Math.round(p.y), p.sz, p.sz);
+    }
+    endCtx.globalAlpha = 1;
+
+    // State machine
+    if (phase === 0) {
+      // Fade in english
+      englishA = Math.min(1, englishA + 0.018);
+      if (englishA >= 1) { phase = 1; holdTimer = 0; }
+    } else if (phase === 1) {
+      // Hold
+      holdTimer++;
+      if (holdTimer > 75) { phase = 2; }
+    } else if (phase === 2) {
+      // Fade out english
+      englishFA = Math.min(1, englishFA + 0.03);
+      if (englishFA >= 1) { phase = 3; charTimer = 0; charIndex = 0; }
+    } else if (phase === 3) {
+      // Reveal hanzi one by one
+      charTimer++;
+      // advance current char alpha
+      if (charIndex < CHARS.length) {
+        charAlphas[charIndex] = Math.min(1, charAlphas[charIndex] + 0.06);
+        // when this char is nearly full, mini firework burst at its position
+        if (charAlphas[charIndex] > 0.05 && charAlphas[charIndex] < 0.12) {
+          const cx = hzX0 + charIndex * (HW + GAP) + HW / 2;
+          spawnFirework(cx, hzY + 11 * HZ / 2);
+        }
+        if (charAlphas[charIndex] >= 1 && charIndex < CHARS.length - 1) {
+          charTimer = 0;
+          charIndex++;
+        }
+        if (charIndex === CHARS.length - 1 && charAlphas[charIndex] >= 1) {
+          phase = 4;
+        }
+      }
+    } else if (phase === 4) {
+      // All done — show replay hint
+      replayA = Math.min(1, replayA + 0.02);
+    }
+
+    renderText();
+    requestAnimationFrame(fwLoop);
+  }
+  requestAnimationFrame(fwLoop);
+
+  // Tap to replay (only after phase 4 starts)
+  function replayHandler(e) {
+    if (phase < 4 || replayA < 0.5) return;
+    e.preventDefault();
+    endScreen.classList.remove('active');
+    ov.remove();
+    document.getElementById('gameScreen').classList.add('active');
+    initGame(true);
+  }
+  endScreen.addEventListener('touchend', replayHandler, { passive: false });
+  endScreen.addEventListener('click', replayHandler);
+}
+
+</script>
+</body>
+</html>
